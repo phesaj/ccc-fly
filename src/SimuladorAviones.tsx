@@ -19,6 +19,8 @@ const razonesCancelacion = [
   "Incidencias con el sistema de reservas",
 ];
 
+
+const STADIA_TOKEN = import.meta.env.VITE_STADIA_TOKEN;
 // Destinos (coordenadas). Ajusta, si gustas, el nombre en español o inglés.
 export const destinos_coords: Record<string, [number, number]> = {
   // México
@@ -519,8 +521,9 @@ export default function SimuladorAviones() {
           >
             <TileLayer
               attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>'
-              url="https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png"
+              url={`https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png?api_key=${STADIA_TOKEN}`}
             />
+            
 
             {aviones.map((vuelo) => {
               // Validación extra al renderizar

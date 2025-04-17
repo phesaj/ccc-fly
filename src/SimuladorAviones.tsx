@@ -5,7 +5,9 @@ import 'leaflet/dist/leaflet.css';
 import { ScrollArea } from './components/ui/scroll-area';
 import { Badge } from './components/ui/badge';
 
+// ===============
 // 1) DATOS Y TIPOS
+// ===============
 const razonesCancelacion = [
   "Mantenimiento de aeronave",
   "Condiciones meteorológicas adversas",
@@ -19,9 +21,9 @@ const razonesCancelacion = [
   "Incidencias con el sistema de reservas",
 ];
 
-
+// Ajusta tu token si quieres, aunque aquí usaremos Stamen para el “efecto nubes”
 const STADIA_TOKEN = import.meta.env.VITE_STADIA_TOKEN;
-// Destinos (coordenadas). Ajusta, si gustas, el nombre en español o inglés.
+
 export const destinos_coords: Record<string, [number, number]> = {
   // México
   'CDMX': [19.4326, -99.1332],
@@ -63,7 +65,6 @@ export const destinos_coords: Record<string, [number, number]> = {
   'Río de Janeiro': [-22.9068, -43.1729],
 };
 
-// Orígenes: mismas ciudades (o subset) para que sea compatible con los destinos
 export interface Origen {
   nombre: string;
   coords: [number, number];
@@ -110,8 +111,20 @@ export const origenes: Origen[] = [
   { nombre: 'Río de Janeiro', coords: [-22.9068, -43.1729] },
 ];
 
-
+// Estados y probabilidad reducida de “Cancelado”
 type EstadoVuelo = 'A Tiempo' | 'Retrasado' | 'Embarcando' | 'Cancelado';
+function pickEstado(): EstadoVuelo {
+  // Ajusta estas probabilidades a tu gusto:
+  const r = Math.random();
+  if (r < 0.95) return 'A Tiempo';       // 70% A Tiempo
+  else if (r < 0.85) return 'Retrasado';  // 15% Retrasado
+  else if (r < 0.75) return 'Embarcando'; // 10% Embarcando
+  else return 'Cancelado';               // 5% Cancelado
+}
+
+// =======================
+// 2) FUNCIONES AUXILIARES
+// =======================
 interface Avion {
   id: number;
   origen: string;
@@ -127,7 +140,7 @@ interface Avion {
   yaAnuncioCancelacion?: boolean;
 }
 
-// 2) FUNCIONES AUXILIARES
+// Calcular ángulo para rotar ícono
 function calcularAngulo(p1: [number, number], p2: [number, number]): number {
   const toRad = (deg: number) => deg * Math.PI / 180;
   const lat1 = toRad(p1[0]);
@@ -141,6 +154,7 @@ function calcularAngulo(p1: [number, number], p2: [number, number]): number {
   return ((brng * 180 / Math.PI) + 360) % 360;
 }
 
+// Ícono custom de avión
 function iconoAvion(angulo: number, colorRojo = false) {
   return L.divIcon({
     html: `
@@ -150,10 +164,11 @@ function iconoAvion(angulo: number, colorRojo = false) {
           style="
             width: 30px;
             transform: rotate(90deg);
-            ${colorRojo
-              ? 'filter: brightness(0) saturate(100%) invert(18%) ' +
-                'sepia(93%) saturate(6688%) hue-rotate(354deg) brightness(98%) contrast(114%);'
-              : ''
+            ${
+              colorRojo
+                ? 'filter: brightness(0) saturate(100%) invert(18%) ' +
+                  'sepia(93%) saturate(6688%) hue-rotate(354deg) brightness(98%) contrast(114%);'
+                : ''
             }"
         />
       </div>
@@ -163,7 +178,7 @@ function iconoAvion(angulo: number, colorRojo = false) {
   });
 }
 
-// Generar curva
+// Generar curva de coordenadas entre dos puntos
 function generarCurva(o: [number, number], d: [number, number], puntos = 30): [number, number][] {
   const toRad = (deg: number) => deg * Math.PI / 180;
   const toDeg = (rad: number) => rad * 180 / Math.PI;
@@ -174,14 +189,13 @@ function generarCurva(o: [number, number], d: [number, number], puntos = 30): [n
     Math.cos(lat1)*Math.cos(lat2)*Math.cos(lon2 - lon1)
   );
 
-  // Si hay algo anormal (dist = NaN), devolvemos []
   if (Number.isNaN(dist)) {
     console.warn("No se pudo calcular la distancia, revisa coords:", o, d);
     return [];
   }
 
   const arr: [number, number][] = [];
-  for (let i=0; i<=puntos; i++) {
+  for (let i = 0; i <= puntos; i++) {
     const f = i / puntos;
     const A = Math.sin((1-f)*dist)/Math.sin(dist);
     const B = Math.sin(f*dist)/Math.sin(dist);
@@ -196,18 +210,15 @@ function generarCurva(o: [number, number], d: [number, number], puntos = 30): [n
   return arr;
 }
 
-// Generar un avión con validaciones
+// Generar un avión con probabilidad reducida de cancelación
 function generarAvion(id: number): Avion | null {
   const ori = origenes[Math.floor(Math.random() * origenes.length)];
-
-  // 1) Tomamos las claves de destinos_coords
   const destKeys = Object.keys(destinos_coords);
   if (!destKeys.length) {
     console.error("No hay destinos en destinos_coords");
     return null;
   }
 
-  // 2) Elegimos un destino random
   const destName = destKeys[Math.floor(Math.random() * destKeys.length)];
   const destinoCoords = destinos_coords[destName];
   if (!destinoCoords) {
@@ -215,24 +226,18 @@ function generarAvion(id: number): Avion | null {
     return null;
   }
 
-  // 3) Estado aleatorio
-  const estados: EstadoVuelo[] = ['A Tiempo', 'Retrasado', 'Embarcando', 'Cancelado'];
-  const estado = estados[Math.floor(Math.random() * estados.length)];
-
-  // 4) Razón de cancelación si es Cancelado
+  const estado = pickEstado();
   let razon: string | undefined;
   if (estado === 'Cancelado') {
     razon = razonesCancelacion[Math.floor(Math.random() * razonesCancelacion.length)];
   }
 
-  // 5) Generar la ruta con validación
   const ruta = generarCurva(ori.coords, destinoCoords);
   if (!ruta.length) {
     console.warn("Ruta inválida (vacía) entre:", ori.nombre, "→", destName);
     return null;
   }
 
-  // 6) Devolvemos un Avion
   return {
     id,
     origen: ori.nombre,
@@ -248,7 +253,6 @@ function generarAvion(id: number): Avion | null {
   };
 }
 
-// Interfaz TTS
 interface QueueTask {
   flightId?: number;
   text: string;
@@ -279,20 +283,29 @@ function anunciarTexto(texto: string): Promise<void> {
 export default function SimuladorAviones() {
   const [aviones, setAviones] = useState<Avion[]>([]);
   const [vuelosAterrizados, setVuelosAterrizados] = useState<Avion[]>([]);
-  const mapRef = useRef<any>(null);
+  const mapRef = useRef<L.Map | null>(null);
 
   // Audios
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const despegueAudio = useRef<HTMLAudioElement | null>(null);
   const aterrizajeAudio = useRef<HTMLAudioElement | null>(null);
 
-  // Colas
+  // Colas (cancel/normal)
   const cancelQueueRef = useRef<QueueTask[]>([]);
   const normalQueueRef = useRef<QueueTask[]>([]);
   const processingRef = useRef<boolean>(false);
 
-  // ID del vuelo en anuncio (tooltip)
+  // Para tooltip permanente
   const [currentAnnouncedFlightId, setCurrentAnnouncedFlightId] = useState<number | null>(null);
+
+  // Vista seleccionada
+  // 'panel' -> sólo panel y llegadas
+  // 'map'   -> sólo mapa
+  // 'both'  -> panel y mapa
+  const [viewMode, setViewMode] = useState<'panel' | 'map' | 'both'>('both');
+
+  // Estado para el menú hamburguesa
+  const [menuOpen, setMenuOpen] = useState(false);
 
   // 1) Cargar audios
   useEffect(() => {
@@ -311,7 +324,7 @@ export default function SimuladorAviones() {
     });
   }
 
-  // 3) Procesar colas TTS
+  // 3) Procesar colas
   function processQueues() {
     if (processingRef.current) return;
     processingRef.current = true;
@@ -351,26 +364,27 @@ export default function SimuladorAviones() {
     cancelQueueRef.current.push({ flightId, text, callback });
     processQueues();
   }
+
   function enqueueNormalTask(flightId: number, text: string, callback?: () => void) {
     normalQueueRef.current.push({ flightId, text, callback });
     processQueues();
   }
 
-  // 4) Interval principal
+  // 4) Interval ppal para generar y mover aviones
   useEffect(() => {
     const interval = setInterval(() => {
-      setAviones(prev => {
+      setAviones((prev) => {
         let newFlights = [...prev];
         const aterrizados: Avion[] = [];
 
-        // Avanzar
-        for (let i=0; i<newFlights.length; i++){
+        // Avanzar cada avión
+        for (let i = 0; i < newFlights.length; i++) {
           const av = newFlights[i];
           if (av.estado === 'Cancelado') {
             if (!av.yaAnuncioCancelacion) {
               enqueueCancelTask(av.id,
-                `El vuelo con destino a ${av.destino} se encuentra cancelado. 
-                 Razón: ${av.razonCancelacion || 'No especificada'}.`,
+                `El vuelo con destino a ${av.destino} se encuentra cancelado.
+                 Por: ${av.razonCancelacion || 'No especificada'}.`,
                 () => {
                   setAviones(old => old.filter(x => x.id !== av.id));
                 }
@@ -382,7 +396,7 @@ export default function SimuladorAviones() {
             if (nextP >= av.ruta.length) {
               // Aterrizó
               aterrizados.push(av);
-              newFlights[i] = null;
+              newFlights[i] = null as any;
             } else {
               newFlights[i] = { ...av, punto: nextP };
             }
@@ -399,7 +413,7 @@ export default function SimuladorAviones() {
           if (mapRef.current && destinoCoords) {
             mapRef.current.flyTo(destinoCoords, 10, { duration: 1.5 });
           }
-          setVuelosAterrizados(old => [...old.slice(-9), av]);
+          setVuelosAterrizados((old) => [...old.slice(-9), av]);
           enqueueNormalTask(av.id,
             `Bienvenidos a ${av.destino}. Les recordamos permanecer sentados hasta que el avión llegue a su posición final.`
           );
@@ -408,15 +422,13 @@ export default function SimuladorAviones() {
         return newFlights;
       });
 
-      // 5) Generar nuevo vuelo
+      // Generar nuevo vuelo
       if (Math.random() < 0.96) {
         const nuevo = generarAvion(Date.now());
-        // Validación: si es null, skip
         if (!nuevo) {
           console.warn("No se pudo generar vuelo (coords inválidas). Se omite.");
           return;
         }
-
         audioRef.current?.play();
         despegueAudio.current?.play();
 
@@ -424,9 +436,9 @@ export default function SimuladorAviones() {
         if (mapRef.current && origenCoords) {
           mapRef.current.flyTo(origenCoords, 10, { duration: 1.5 });
         }
-        setAviones(prev => [nuevo, ...prev]);
 
-        // Anunciar despegue si no está cancelado
+        setAviones((prev) => [nuevo, ...prev]);
+
         if (nuevo.estado !== 'Cancelado') {
           const distKm = origenCoords
             ? L.latLng(origenCoords).distanceTo(L.latLng(destinos_coords[nuevo.destino])) / 1000
@@ -443,14 +455,22 @@ export default function SimuladorAviones() {
           );
         }
       }
-    }, 4000);
+    }, 6000);
 
     return () => clearInterval(interval);
   }, []);
 
-  // 6) Render
-  const ultimoVuelo = vuelosAterrizados.at(-1);
+  // 5) Forzar un re-cálculo del tamaño del mapa al cambiar a "map" o "both"
+  useEffect(() => {
+    if (mapRef.current) {
+      // Dejamos un pequeño retardo
+      setTimeout(() => {
+        mapRef.current!.invalidateSize();
+      }, 200);
+    }
+  }, [viewMode]);
 
+  // Determinar color de tarjeta según estado
   function getCardColor(estado: EstadoVuelo) {
     switch (estado) {
       case 'Cancelado': return 'bg-orange-600';
@@ -459,166 +479,392 @@ export default function SimuladorAviones() {
     }
   }
 
+  // Tomar sólo 10 vuelos (listado circular visible en el panel)
+  const avionesParaPanel = aviones.slice(0, 7);
+
+  // ================
+  // RENDER
+  // ================
   return (
-    <div className="flex flex-col h-screen">
-      <div className="grid grid-cols-1 lg:grid-cols-3 flex-1 overflow-hidden">
+    <div className="min-h-screen bg-black text-white flex flex-col">
+      {/* Menú Superior con Hamburguesa */}
+      <header className="bg-gray-900 p-4 flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Control de Tráfico Aéreo</h1>
+        
+        {/* Botón hamburguesa */}
+        <button
+          onClick={() => setMenuOpen(!menuOpen)}
+          className="text-white focus:outline-none"
+        >
+          {/* Un simple icono “hamburguesa” con 3 barras */}
+          <svg width="24" height="24" fill="none" stroke="currentColor" strokeWidth="2"
+               strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
 
-        {/* PANEL */}
-        <div className="p-4 border-r bg-[#1e1e2e] text-white overflow-y-auto">
-          <h2 className="text-2xl font-bold mb-4">🛫 Panel de Vuelos</h2>
-          <ScrollArea>
-            <div className="space-y-4">
-              {aviones.map((vuelo) => (
-                <div
-                  key={`card-${vuelo.id}`}
-                  className={`
-                    rounded-lg shadow-md p-4 cursor-pointer
-                    transition-colors duration-700 text-white
-                    ${getCardColor(vuelo.estado)}
-                  `}
-                  onClick={() => {
-                    if (vuelo.estado === 'Cancelado') return;
-                    const coords = vuelo.ruta[vuelo.punto];
-                    if (!coords) return; // validación extra
-                    if (mapRef.current) {
-                      mapRef.current.flyTo(coords, 13, { animate: true, duration: 1.2 });
-                      setTimeout(() => {
-                        mapRef.current.invalidateSize();
-                      }, 1300);
-                    }
-                  }}
-                >
-                  <div className="font-semibold text-lg">
-                    {vuelo.origen} → {vuelo.destino}
+        {/* Opciones del menú (visibles sólo cuando menuOpen es true) */}
+        {menuOpen && (
+          <div className="absolute top-16 right-4 bg-gray-800 p-3 rounded-md shadow-md flex flex-col gap-2">
+            <button
+              onClick={() => {
+                setViewMode('panel');
+                setMenuOpen(false);
+              }}
+              className="bg-blue-600 hover:bg-blue-700 px-3 py-2 rounded-md text-sm"
+            >
+              Solo Panel y Llegadas
+            </button>
+            {/*<button
+              onClick={() => {
+                setViewMode('map');
+                setMenuOpen(false);
+              }}
+              className="bg-green-600 hover:bg-green-700 px-3 py-2 rounded-md text-sm"
+            >
+              Solo Mapa
+            </button>*/}
+            <button
+              onClick={() => {
+                setViewMode('both');
+                setMenuOpen(false);
+              }}
+              className="bg-purple-600 hover:bg-purple-700 px-3 py-2 rounded-md text-sm"
+            >
+              Panel y Mapa
+            </button>
+          </div>
+        )}
+      </header>
+
+      {/* Dependiendo de la vista, mostramos distintas secciones */}
+      {viewMode === 'panel' && (
+        <>
+          {/* SOLO PANEL Y LLEGADAS */}
+          <div className="flex-1 overflow-hidden">
+            <div className="grid grid-cols-1 lg:grid-cols-1 flex-1">
+              <div className="border-gray-700 bg-[#1e1e2e] p-4 overflow-y-auto h-full">
+                <h2 className="text-2xl font-bold mb-4">🛫 Panel de Vuelos</h2>
+                <ScrollArea>
+                  <div className="space-y-4">
+                    {avionesParaPanel.map((vuelo) => (
+                      <div
+                        key={`card-${vuelo.id}`}
+                        className={`
+                          rounded-lg shadow-md p-4 cursor-pointer
+                          transition-colors duration-700 text-white
+                          ${getCardColor(vuelo.estado)}
+                        `}
+                        onClick={() => {
+                          // Aquí NO volamos el mapa porque no se ve en esta vista.
+                        }}
+                      >
+                        <div className="font-semibold text-lg">
+                          {vuelo.origen} → {vuelo.destino}
+                        </div>
+                        <div className="text-sm text-gray-200">{vuelo.aerolinea}</div>
+                        <div className="text-xs text-gray-300">
+                          Alt: {vuelo.altitud} ft · Vel: {vuelo.velocidad} km/h
+                        </div>
+                        <div className="flex gap-2 mt-2 flex-wrap items-center">
+                          <Badge className="bg-gray-700 text-white">
+                            {vuelo.puerta}
+                          </Badge>
+                          <Badge className="bg-gray-800 text-white">
+                            {vuelo.estado}
+                          </Badge>
+                          {vuelo.estado === 'Cancelado' && (
+                            <span className="text-xs text-red-200 italic">
+                              {vuelo.razonCancelacion || 'No especificada'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <div className="text-sm text-gray-200">{vuelo.aerolinea}</div>
-                  <div className="text-xs text-gray-300">
-                    Alt: {vuelo.altitud} ft · Vel: {vuelo.velocidad} km/h
-                  </div>
-                  <div className="flex gap-2 mt-2 flex-wrap items-center">
-                    <Badge className="bg-gray-700 text-white">{vuelo.puerta}</Badge>
-                    <Badge className="bg-gray-800 text-white">{vuelo.estado}</Badge>
-                    {vuelo.estado === 'Cancelado' && (
-                      <span className="text-xs text-red-200 italic">
-                        {vuelo.razonCancelacion || 'No especificada'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              ))}
+                </ScrollArea>
+              </div>
             </div>
-          </ScrollArea>
-        </div>
+          </div>
 
-        {/* MAPA */}
-        <div className="lg:col-span-2">
-          <MapContainer
-            center={[23.6345, -102.5528]}
-            zoom={5}
-            scrollWheelZoom
-            className="h-full w-full"
-            whenCreated={(map) => { mapRef.current = map; }}
-          >
-            <TileLayer
-              attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>'
-              url={`https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png?api_key=${STADIA_TOKEN}`}
-            />
-            
-
-            {aviones.map((vuelo) => {
-              // Validación extra al renderizar
-              const idx = vuelo.punto;
-              const actualPos = vuelo.ruta[idx];
-              if (!actualPos || Number.isNaN(actualPos[0]) || Number.isNaN(actualPos[1])) {
-                console.warn("Coordenadas inválidas en render:", vuelo, actualPos);
-                return null; // Saltamos este vuelo
-              }
-
-              const isCancel = (vuelo.estado === 'Cancelado');
-              const isBeingAnnounced = (vuelo.id === currentAnnouncedFlightId);
-
-              return (
-                <div key={`avion-${vuelo.id}`}>
-                  {/* Marker */}
-                  <Marker
-                    position={actualPos}
-                    icon={iconoAvion(
-                      (calcularAngulo(
-                        actualPos,
-                        vuelo.ruta[idx+1] || actualPos
-                      ) - 85 + 360) % 360,
-                      isCancel
-                    )}
-                  >
-                    {isBeingAnnounced ? (
-                      <Tooltip permanent direction="top" offset={[0, -15]}>
-                        ✈️ {vuelo.origen} → {vuelo.destino}<br/>
-                        Alt: {vuelo.altitud} ft - Vel: {vuelo.velocidad} km/h
-                        {isCancel && (
-                          <div style={{color:'red', fontWeight:'bold'}}>
-                            Cancelado: {vuelo.razonCancelacion || 'Sin razón'}
-                          </div>
+          {/* ÚLTIMO VUELO ATERRIZADO */}
+          {vuelosAterrizados.length > 0 && (
+            <div className="bg-[#111827] text-white p-6 border-t border-gray-800">
+              <h3 className="text-2xl font-bold mb-4 text-yellow-400">🛬 Último Aterrizaje</h3>
+              <div className="bg-[#1f2937] p-4 rounded-lg shadow-md flex flex-col gap-2">
+                {(() => {
+                  const ultimo = vuelosAterrizados.at(-1);
+                  if (!ultimo) return null;
+                  return (
+                    <>
+                      <div className="text-xl font-semibold">
+                        {ultimo.origen} → {ultimo.destino}
+                      </div>
+                      <div className="text-lg text-gray-300">
+                        ✈️ {ultimo.aerolinea}
+                      </div>
+                      <div className="flex flex-wrap gap-3 mt-2 text-base">
+                        <span className="bg-blue-600 px-3 py-1 rounded-full">
+                          Altitud: {ultimo.altitud} ft
+                        </span>
+                        <span className="bg-green-600 px-3 py-1 rounded-full">
+                          Velocidad: {ultimo.velocidad} km/h
+                        </span>
+                        <span className="bg-purple-600 px-3 py-1 rounded-full">
+                          Puerta: {ultimo.puerta}
+                        </span>
+                        <span className="bg-red-600 px-3 py-1 rounded-full">
+                          Estado: {ultimo.estado}
+                        </span>
+                        {ultimo.estado === 'Cancelado' && (
+                          <span className="bg-red-800 px-3 py-1 rounded-full">
+                            Razón: {ultimo.razonCancelacion || 'No especificada'}
+                          </span>
                         )}
-                      </Tooltip>
-                    ) : (
-                      <Tooltip direction="top" offset={[0, -15]}>
-                        {vuelo.origen} → {vuelo.destino}
-                      </Tooltip>
-                    )}
-                  </Marker>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+        </>
+      )}
 
-                  {
-                    (vuelo.ruta && vuelo.ruta.length > 1) && (
+      {viewMode === 'map' && (
+        <>
+          {/* SOLO MAPA */}
+          <div className="flex-1">
+            <MapContainer
+              center={[23.6345, -102.5528]}
+              zoom={5}
+              scrollWheelZoom
+              className="w-full h-full"
+              whenCreated={(map) => { mapRef.current = map; }}
+            >
+              {/* TileLayer de Stamen Watercolor (efecto “nubes”) */}
+              <TileLayer
+                attribution='Map tiles by Stamen Design, under CC BY 3.0. Data by OpenStreetMap, under ODbL.'
+                url="https://stamen-tiles.a.ssl.fastly.net/watercolor/{z}/{x}/{y}.jpg"
+              />
+              {aviones.map((vuelo) => {
+                const idx = vuelo.punto;
+                const actualPos = vuelo.ruta[idx];
+                if (!actualPos || Number.isNaN(actualPos[0]) || Number.isNaN(actualPos[1])) {
+                  console.warn("Coordenadas inválidas en render:", vuelo, actualPos);
+                  return null;
+                }
+                const isCancel = (vuelo.estado === 'Cancelado');
+                const isBeingAnnounced = (vuelo.id === currentAnnouncedFlightId);
+
+                return (
+                  <div key={`avion-${vuelo.id}`}>
+                    <Marker
+                      position={actualPos}
+                      icon={iconoAvion(
+                        (calcularAngulo(
+                          actualPos,
+                          vuelo.ruta[idx+1] || actualPos
+                        ) - 85 + 360) % 360,
+                        isCancel
+                      )}
+                    >
+                      {isBeingAnnounced ? (
+                        <Tooltip permanent direction="top" offset={[0, -15]}>
+                          ✈️ {vuelo.origen} → {vuelo.destino}<br />
+                          Alt: {vuelo.altitud} ft - Vel: {vuelo.velocidad} km/h
+                          {isCancel && (
+                            <div style={{ color:'red', fontWeight:'bold' }}>
+                              Cancelado: {vuelo.razonCancelacion || 'Sin razón'}
+                            </div>
+                          )}
+                        </Tooltip>
+                      ) : (
+                        <Tooltip direction="top" offset={[0, -15]}>
+                          {vuelo.origen} → {vuelo.destino}
+                        </Tooltip>
+                      )}
+                    </Marker>
+
+                    {vuelo.ruta && vuelo.ruta.length > 1 && (
                       <Polyline
                         positions={vuelo.ruta}
                         pathOptions={{ color: '#999', weight: 2, dashArray: '3' }}
                       />
-                    )
-                  }
-                </div>
-              );
-            })}
-          </MapContainer>
-        </div>
-      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </MapContainer>
+          </div>
+        </>
+      )}
 
-      {/* ÚLTIMO VUELO ATERRIZADO */}
-      {(() => {
-        const ultimo = vuelosAterrizados.at(-1);
-        if (!ultimo) return null;
-        return (
-          <div className="bg-[#111827] text-white p-6 border-t border-gray-800">
-            <h3 className="text-2xl font-bold mb-4 text-yellow-400">🛬 Último Aterrizaje</h3>
-            <div className="bg-[#1f2937] p-4 rounded-lg shadow-md flex flex-col gap-2">
-              <div className="text-xl font-semibold">
-                {ultimo.origen} → {ultimo.destino}
-              </div>
-              <div className="text-lg text-gray-300">
-                ✈️ {ultimo.aerolinea}
-              </div>
-              <div className="flex flex-wrap gap-3 mt-2 text-base">
-                <span className="bg-blue-600 px-3 py-1 rounded-full">
-                  Altitud: {ultimo.altitud} ft
-                </span>
-                <span className="bg-green-600 px-3 py-1 rounded-full">
-                  Velocidad: {ultimo.velocidad} km/h
-                </span>
-                <span className="bg-purple-600 px-3 py-1 rounded-full">
-                  Puerta: {ultimo.puerta}
-                </span>
-                <span className="bg-red-600 px-3 py-1 rounded-full">
-                  Estado: {ultimo.estado}
-                </span>
-                {ultimo.estado === 'Cancelado' && (
-                  <span className="bg-red-800 px-3 py-1 rounded-full">
-                    Razón: {ultimo.razonCancelacion || 'No especificada'}
-                  </span>
-                )}
-              </div>
+      {viewMode === 'both' && (
+        <>
+          {/* PANEL + MAPA (vista original) */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 flex-1">
+            <div className="order-1 lg:col-span-2 h-[50vh] lg:h-auto">
+              <MapContainer
+                center={[23.6345, -102.5528]}
+                zoom={5}
+                scrollWheelZoom
+                className="w-full h-full"
+                whenCreated={(map) => { mapRef.current = map; }}
+              >
+                
+                <TileLayer
+                  attribution='&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>'
+                  url={`https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}{r}.png?api_key=${STADIA_TOKEN}`}
+                />
+                {aviones.map((vuelo) => {
+                  const idx = vuelo.punto;
+                  const actualPos = vuelo.ruta[idx];
+                  if (!actualPos || Number.isNaN(actualPos[0]) || Number.isNaN(actualPos[1])) {
+                    console.warn("Coordenadas inválidas en render:", vuelo, actualPos);
+                    return null;
+                  }
+                  const isCancel = (vuelo.estado === 'Cancelado');
+                  const isBeingAnnounced = (vuelo.id === currentAnnouncedFlightId);
+
+                  return (
+                    <div key={`avion-${vuelo.id}`}>
+                      <Marker
+                        position={actualPos}
+                        icon={iconoAvion(
+                          (calcularAngulo(
+                            actualPos,
+                            vuelo.ruta[idx+1] || actualPos
+                          ) - 85 + 360) % 360,
+                          isCancel
+                        )}
+                      >
+                        {isBeingAnnounced ? (
+                          <Tooltip permanent direction="top" offset={[0, -15]}>
+                            ✈️ {vuelo.origen} → {vuelo.destino}<br />
+                            Alt: {vuelo.altitud} ft - Vel: {vuelo.velocidad} km/h
+                            {isCancel && (
+                              <div style={{ color:'red', fontWeight:'bold' }}>
+                                Cancelado: {vuelo.razonCancelacion || 'Sin razón'}
+                              </div>
+                            )}
+                          </Tooltip>
+                        ) : (
+                          <Tooltip direction="top" offset={[0, -15]}>
+                            {vuelo.origen} → {vuelo.destino}
+                          </Tooltip>
+                        )}
+                      </Marker>
+
+                      {vuelo.ruta && vuelo.ruta.length > 1 && (
+                        <Polyline
+                          positions={vuelo.ruta}
+                          pathOptions={{ color: '#999', weight: 2, dashArray: '3' }}
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </MapContainer>
+            </div>
+
+            {/* Panel de Vuelos */}
+            <div className="order-2 border-l border-gray-700 bg-[#1e1e2e] p-4 overflow-y-auto h-full">
+              <h2 className="text-2xl font-bold mb-4">🛫 Panel de Vuelos</h2>
+              <ScrollArea>
+                <div className="space-y-4">
+                  {avionesParaPanel.map((vuelo) => (
+                    <div
+                      key={`card-${vuelo.id}`}
+                      className={`
+                        rounded-lg shadow-md p-4 cursor-pointer
+                        transition-colors duration-700 text-white
+                        ${getCardColor(vuelo.estado)}
+                      `}
+                      onClick={() => {
+                        if (vuelo.estado === 'Cancelado') return;
+                        const coords = vuelo.ruta[vuelo.punto];
+                        if (!coords) return;
+                        if (mapRef.current) {
+                          mapRef.current.flyTo(coords, 13, { animate: true, duration: 1.2 });
+                          setTimeout(() => {
+                            mapRef.current!.invalidateSize();
+                          }, 1300);
+                        }
+                      }}
+                    >
+                      <div className="font-semibold text-lg">
+                        {vuelo.origen} → {vuelo.destino}
+                      </div>
+                      <div className="text-sm text-gray-200">{vuelo.aerolinea}</div>
+                      <div className="text-xs text-gray-300">
+                        Alt: {vuelo.altitud} ft · Vel: {vuelo.velocidad} km/h
+                      </div>
+                      <div className="flex gap-2 mt-2 flex-wrap items-center">
+                        <Badge className="bg-gray-700 text-white">
+                          {vuelo.puerta}
+                        </Badge>
+                        <Badge className="bg-gray-800 text-white">
+                          {vuelo.estado}
+                        </Badge>
+                        {vuelo.estado === 'Cancelado' && (
+                          <span className="text-xs text-red-200 italic">
+                            {vuelo.razonCancelacion || 'No especificada'}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </ScrollArea>
             </div>
           </div>
-        );
-      })()}
+
+          {/* Último Vuelo Aterrizado */}
+          {vuelosAterrizados.length > 0 && (
+            <div className="bg-[#111827] text-white p-6 border-t border-gray-800">
+              <h3 className="text-2xl font-bold mb-4 text-yellow-400">🛬 Último Aterrizaje</h3>
+              <div className="bg-[#1f2937] p-4 rounded-lg shadow-md flex flex-col gap-2">
+                {(() => {
+                  const ultimo = vuelosAterrizados.at(-1);
+                  if (!ultimo) return null;
+                  return (
+                    <>
+                      <div className="text-xl font-semibold">
+                        {ultimo.origen} → {ultimo.destino}
+                      </div>
+                      <div className="text-lg text-gray-300">
+                        ✈️ {ultimo.aerolinea}
+                      </div>
+                      <div className="flex flex-wrap gap-3 mt-2 text-base">
+                        <span className="bg-blue-600 px-3 py-1 rounded-full">
+                          Altitud: {ultimo.altitud} ft
+                        </span>
+                        <span className="bg-green-600 px-3 py-1 rounded-full">
+                          Velocidad: {ultimo.velocidad} km/h
+                        </span>
+                        <span className="bg-purple-600 px-3 py-1 rounded-full">
+                          Puerta: {ultimo.puerta}
+                        </span>
+                        <span className="bg-red-600 px-3 py-1 rounded-full">
+                          Estado: {ultimo.estado}
+                        </span>
+                        {ultimo.estado === 'Cancelado' && (
+                          <span className="bg-red-800 px-3 py-1 rounded-full">
+                            Razón: {ultimo.razonCancelacion || 'No especificada'}
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }
